@@ -1,19 +1,41 @@
 import type { Express } from 'express';
-import { createApp } from '../src/server/createApp.js';
 
 let cachedApp: Express | null = null;
 
-function getApp(): Express {
+async function getApp(): Promise<Express> {
   if (!cachedApp) {
-    cachedApp = createApp();
+    const mod = await import('../src/server/createApp.js');
+    cachedApp = mod.createApp();
   }
   return cachedApp;
 }
 
-export default function handler(req: any, res: any) {
+export default async function handler(req: any, res: any) {
   try {
-    const app = getApp();
-    return app(req, res);
+    const app = await getApp();
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const done = () => {
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
+      };
+
+      res.once('finish', done);
+      res.once('close', done);
+
+      app(req, res, (err?: any) => {
+        if (err) {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+          return;
+        }
+        done();
+      });
+    });
   } catch (error: any) {
     console.error(
       JSON.stringify({

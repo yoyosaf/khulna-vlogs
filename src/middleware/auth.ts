@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
-import { DecodedIdToken } from 'firebase-admin/auth';
+import type { DecodedIdToken } from 'firebase-admin/auth';
 import { getAdminAuth } from '../lib/firebase-admin.js';
 import { DatabaseNotConfiguredError, getOrCreateUser } from '../db/users.js';
 
@@ -31,7 +31,7 @@ export const requireAuth = async (
 
   let authClient;
   try {
-    authClient = getAdminAuth();
+    authClient = await getAdminAuth();
   } catch (initError: any) {
     console.error(
       JSON.stringify({
