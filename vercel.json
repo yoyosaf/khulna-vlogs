@@ -1,8 +1,15 @@
 {
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/((?!health$).*)",
+      "destination": "/api/index"
+    },
+    {
       "source": "/sitemap.xml",
-      "destination": "/api/sitemap"
+      "destination": "/api/index"
     },
     {
       "source": "/((?!api/).*)",

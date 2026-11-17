@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { DecodedIdToken } from 'firebase-admin/auth';
-import { adminAuth } from '../lib/firebase-admin.ts';
-import { getOrCreateUser } from '../db/users.ts';
+import { adminAuth } from '../lib/firebase-admin';
+import { DatabaseNotConfiguredError, getOrCreateUser } from '../db/users';
 
 export interface AuthRequest extends Request {
   user?: DecodedIdToken;
@@ -25,9 +25,18 @@ export const requireAuth = async (
   }
 
   const token = authHeader.split('Bearer ')[1];
+  let decodedToken: DecodedIdToken;
   try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
+    decodedToken = await adminAuth.verifyIdToken(token);
     req.user = decodedToken;
+  } catch (error: any) {
+    console.error('Error verifying Firebase ID token:', error);
+    return res.status(401).json({
+      error: `Unauthorized: ${error?.code || error?.message || 'Invalid token'}`,
+    });
+  }
+
+  try {
     const dbUser = await getOrCreateUser(
       decodedToken.uid,
       decodedToken.email || '',
@@ -36,10 +45,11 @@ export const requireAuth = async (
     req.dbUser = dbUser;
     next();
   } catch (error: any) {
-    console.error('Error verifying Firebase ID token:', error);
-    return res.status(401).json({
-      error: `Unauthorized: ${error?.code || error?.message || 'Invalid token'}`,
-    });
+    if (error instanceof DatabaseNotConfiguredError) {
+      return res.status(503).json({ error: error.message });
+    }
+    console.error('Database error during auth verification:', error);
+    return res.status(500).json({ error: 'Failed to load user profile from database' });
   }
 };
 

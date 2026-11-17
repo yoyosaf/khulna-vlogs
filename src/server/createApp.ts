@@ -1,7 +1,6 @@
 import express from 'express';
 import { asc, desc, eq, ilike, or } from 'drizzle-orm';
-import { db, isPostgresConfigured } from '../db/index.ts';
-import { getMemoryStore, nextMemoryId } from '../db/memoryStore.ts';
+import { db, isPostgresConfigured } from '../db/index';
 import {
   articles,
   businesses,
@@ -16,10 +15,10 @@ import {
   siteSettings,
   users,
   videos,
-} from '../db/schema.ts';
-import { ensureSeeded } from '../db/seed.ts';
-import { isSuperAdminEmail } from '../db/users.ts';
-import { AuthRequest, requireAdmin, requireAuth } from '../middleware/auth.ts';
+} from '../db/schema';
+import { ensureSeeded } from '../db/seed';
+import { isSuperAdminEmail } from '../db/users';
+import { AuthRequest, requireAdmin, requireAuth } from '../middleware/auth';
 
 function extractYoutubeId(url: string): string {
   if (!url) return '';
@@ -44,14 +43,29 @@ function slugify(input: string): string {
   );
 }
 
+function requireDatabase(
+  _req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  if (!isPostgresConfigured()) {
+    return res.status(503).json({
+      error:
+        'PostgreSQL database is not configured for this environment. Set SQL_HOST, SQL_USER, SQL_PASSWORD, and SQL_DB_NAME in environment variables.',
+    });
+  }
+  next();
+}
+
 export function createApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: '12mb' }));
 
   app.get('/api/health', (_req, res) => {
-    res.json({
-      ok: true,
-      storage: isPostgresConfigured() ? 'postgres' : 'memory',
+    res.status(200).json({
+      success: true,
+      message: 'Vercel backend is running',
+      storage: isPostgresConfigured() ? 'postgres' : 'unconfigured',
     });
   });
 
@@ -145,33 +159,6 @@ export function createApp(): express.Express {
             `<url><loc>${baseUrl}/events/${e.slug}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>`
           );
         }
-      } else {
-        const store = getMemoryStore();
-        for (const a of store.articles.filter((x) => x.status === 'published')) {
-          urls.push(
-            `<url><loc>${baseUrl}/stories/${a.slug}</loc><changefreq>weekly</changefreq><priority>0.9</priority></url>`
-          );
-        }
-        for (const d of store.destinations.filter((x) => x.status === 'published')) {
-          urls.push(
-            `<url><loc>${baseUrl}/explore/${d.slug}</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>`
-          );
-        }
-        for (const r of store.restaurants.filter((x) => x.status === 'published')) {
-          urls.push(
-            `<url><loc>${baseUrl}/food/${r.slug}</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>`
-          );
-        }
-        for (const b of store.businesses.filter((x) => x.status === 'published')) {
-          urls.push(
-            `<url><loc>${baseUrl}/directory/${b.slug}</loc><changefreq>monthly</changefreq><priority>0.6</priority></url>`
-          );
-        }
-        for (const e of store.events.filter((x) => x.status === 'published')) {
-          urls.push(
-            `<url><loc>${baseUrl}/events/${e.slug}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>`
-          );
-        }
       }
 
       res.type('application/xml').send(
@@ -188,26 +175,13 @@ export function createApp(): express.Express {
   app.get('/sitemap.xml', handleSitemap);
   app.get('/api/sitemap', handleSitemap);
 
-  // Public media serving
-  app.get('/api/media/:id', async (req, res) => {
+  // Public media serving from PostgreSQL
+  app.get('/api/media/:id', requireDatabase, async (req, res) => {
     try {
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) {
         return res.status(400).json({ error: 'Invalid media ID' });
       }
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const item = store.mediaUploads.find((m) => m.id === id);
-        if (!item) {
-          return res.status(404).json({ error: 'Media not found' });
-        }
-        const buffer = Buffer.from(item.dataBase64, 'base64');
-        res.setHeader('Content-Type', item.mimeType);
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        return res.send(buffer);
-      }
-
       const rows = await db
         .select()
         .from(mediaUploads)
@@ -228,23 +202,8 @@ export function createApp(): express.Express {
   });
 
   // Public bootstrap data
-  app.get('/api/public/bootstrap', async (_req, res) => {
+  app.get('/api/public/bootstrap', requireDatabase, async (_req, res) => {
     try {
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        return res.json({
-          categories: store.categories,
-          articles: store.articles.filter((a) => a.status === 'published'),
-          destinations: store.destinations.filter((d) => d.status === 'published'),
-          restaurants: store.restaurants.filter((r) => r.status === 'published'),
-          businesses: store.businesses.filter((b) => b.status === 'published'),
-          videos: store.videos.filter((v) => v.status === 'published'),
-          events: store.events.filter((e) => e.status === 'published'),
-          galleryItems: store.galleryItems.filter((g) => g.status === 'published'),
-          settings: store.settings,
-        });
-      }
-
       await ensureSeeded();
       const [
         cats,
@@ -314,8 +273,9 @@ export function createApp(): express.Express {
   });
 
   // Public search
-  app.get('/api/public/search', async (req, res) => {
+  app.get('/api/public/search', requireDatabase, async (req, res) => {
     try {
+      await ensureSeeded();
       const q = String(req.query.q || '').trim();
       if (!q) {
         return res.json({
@@ -326,62 +286,6 @@ export function createApp(): express.Express {
           events: [],
         });
       }
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const needle = q.toLowerCase();
-        const match = (val?: string | null) =>
-          Boolean(val && val.toLowerCase().includes(needle));
-
-        return res.json({
-          articles: store.articles
-            .filter(
-              (a) =>
-                a.status === 'published' &&
-                (match(a.titleEn) ||
-                  match(a.titleBn) ||
-                  match(a.excerptEn) ||
-                  match(a.excerptBn))
-            )
-            .slice(0, 10),
-          destinations: store.destinations
-            .filter(
-              (d) =>
-                d.status === 'published' &&
-                (match(d.nameEn) ||
-                  match(d.nameBn) ||
-                  match(d.summaryEn) ||
-                  match(d.locationText))
-            )
-            .slice(0, 10),
-          restaurants: store.restaurants
-            .filter(
-              (r) =>
-                r.status === 'published' &&
-                (match(r.nameEn) ||
-                  match(r.nameBn) ||
-                  match(r.specialtyEn) ||
-                  match(r.areaEn))
-            )
-            .slice(0, 10),
-          businesses: store.businesses
-            .filter(
-              (b) =>
-                b.status === 'published' &&
-                (match(b.nameEn) || match(b.nameBn) || match(b.area))
-            )
-            .slice(0, 10),
-          events: store.events
-            .filter(
-              (ev) =>
-                ev.status === 'published' &&
-                (match(ev.titleEn) || match(ev.titleBn) || match(ev.venueEn))
-            )
-            .slice(0, 10),
-        });
-      }
-
-      await ensureSeeded();
       const pattern = `%${q}%`;
       const [arts, dests, rests, biz, evts] = await Promise.all([
         db
@@ -458,28 +362,12 @@ export function createApp(): express.Express {
   });
 
   // Public contact form
-  app.post('/api/public/contact', async (req, res) => {
+  app.post('/api/public/contact', requireDatabase, async (req, res) => {
     try {
       const { name, email, subject, message } = req.body || {};
       if (!name || !email || !subject || !message) {
         return res.status(400).json({ error: 'All fields are required' });
       }
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const id = nextMemoryId(store);
-        store.contacts.unshift({
-          id,
-          name: String(name).slice(0, 120),
-          email: String(email).slice(0, 160),
-          subject: String(subject).slice(0, 200),
-          message: String(message).slice(0, 4000),
-          status: 'unread',
-          createdAt: new Date().toISOString(),
-        });
-        return res.status(201).json({ ok: true, id });
-      }
-
       const inserted = await db
         .insert(contactSubmissions)
         .values({
@@ -497,30 +385,13 @@ export function createApp(): express.Express {
   });
 
   // Public newsletter subscribe
-  app.post('/api/public/newsletter', async (req, res) => {
+  app.post('/api/public/newsletter', requireDatabase, async (req, res) => {
     try {
       const { email, language } = req.body || {};
       const cleanEmail = String(email || '').trim().toLowerCase();
       if (!cleanEmail || !cleanEmail.includes('@')) {
         return res.status(400).json({ error: 'Valid email is required' });
       }
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const existing = store.subscribers.find((s) => s.email === cleanEmail);
-        if (existing) {
-          existing.language = language === 'bn' ? 'bn' : 'en';
-        } else {
-          store.subscribers.unshift({
-            id: nextMemoryId(store),
-            email: cleanEmail.slice(0, 160),
-            language: language === 'bn' ? 'bn' : 'en',
-            createdAt: new Date().toISOString(),
-          });
-        }
-        return res.status(201).json({ ok: true });
-      }
-
       await db
         .insert(newsletterSubscribers)
         .values({
@@ -546,25 +417,6 @@ export function createApp(): express.Express {
   // Admin overview (all items including drafts)
   app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
     try {
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        return res.json({
-          categories: store.categories,
-          articles: store.articles,
-          destinations: store.destinations,
-          restaurants: store.restaurants,
-          businesses: store.businesses,
-          videos: store.videos,
-          events: store.events,
-          galleryItems: store.galleryItems,
-          contacts: store.contacts,
-          subscribers: store.subscribers,
-          users: store.users,
-          settings: store.settings,
-          storageMode: 'memory',
-        });
-      }
-
       await ensureSeeded();
       const [
         cats,
@@ -613,7 +465,6 @@ export function createApp(): express.Express {
         subscribers,
         users: allUsers,
         settings: settingsRows[0] || null,
-        storageMode: 'postgres',
       });
     } catch (error) {
       console.error('Admin overview error:', error);
@@ -621,7 +472,7 @@ export function createApp(): express.Express {
     }
   });
 
-  // Admin image upload
+  // Admin image upload -> stored in PostgreSQL media_uploads
   app.post('/api/admin/media', requireAdmin, async (req: AuthRequest, res) => {
     try {
       const { filename, mimeType, dataBase64 } = req.body || {};
@@ -633,20 +484,6 @@ export function createApp(): express.Express {
         return res.status(400).json({ error: 'Unsupported image format' });
       }
       const cleanedBase64 = String(dataBase64).replace(/^data:[^;]+;base64,/, '');
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const id = nextMemoryId(store);
-        store.mediaUploads.push({
-          id,
-          filename: String(filename).slice(0, 120),
-          mimeType,
-          dataBase64: cleanedBase64,
-          uploadedBy: req.dbUser?.email || 'admin',
-        });
-        return res.status(201).json({ url: `/api/media/${id}` });
-      }
-
       const inserted = await db
         .insert(mediaUploads)
         .values({
@@ -669,37 +506,6 @@ export function createApp(): express.Express {
     try {
       const b = req.body || {};
       const slug = b.slug ? slugify(b.slug) : slugify(b.titleEn || 'story');
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const now = new Date().toISOString();
-        const created = {
-          id: nextMemoryId(store),
-          slug,
-          titleEn: b.titleEn,
-          titleBn: b.titleBn || b.titleEn,
-          excerptEn: b.excerptEn || '',
-          excerptBn: b.excerptBn || b.excerptEn || '',
-          contentEn: b.contentEn || '',
-          contentBn: b.contentBn || b.contentEn || '',
-          categorySlug: b.categorySlug || 'city-lifestyle',
-          featuredImage:
-            b.featuredImage || '/src/assets/images/hero_khulna_rupsha_1794914379194.jpg',
-          imageAltEn: b.imageAltEn || b.titleEn,
-          imageAltBn: b.imageAltBn || b.titleBn || b.titleEn,
-          authorName: b.authorName || 'Khulna Vlogs Editorial',
-          readTimeMinutes: Number(b.readTimeMinutes) || 5,
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-          isFeatured: Boolean(b.isFeatured),
-          seoTitle: b.seoTitle || b.titleEn,
-          seoDescription: b.seoDescription || b.excerptEn || null,
-          publishedAt: now,
-          updatedAt: now,
-        };
-        store.articles.unshift(created);
-        return res.status(201).json(created);
-      }
-
       const created = await db
         .insert(articles)
         .values({
@@ -734,37 +540,6 @@ export function createApp(): express.Express {
     try {
       const id = Number(req.params.id);
       const b = req.body || {};
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const idx = store.articles.findIndex((a) => a.id === id);
-        if (idx === -1) return res.status(404).json({ error: 'Article not found' });
-        const cur = store.articles[idx];
-        const updated = {
-          ...cur,
-          slug: b.slug ? slugify(b.slug) : cur.slug,
-          titleEn: b.titleEn ?? cur.titleEn,
-          titleBn: b.titleBn ?? cur.titleBn,
-          excerptEn: b.excerptEn ?? cur.excerptEn,
-          excerptBn: b.excerptBn ?? cur.excerptBn,
-          contentEn: b.contentEn ?? cur.contentEn,
-          contentBn: b.contentBn ?? cur.contentBn,
-          categorySlug: b.categorySlug ?? cur.categorySlug,
-          featuredImage: b.featuredImage ?? cur.featuredImage,
-          imageAltEn: b.imageAltEn ?? cur.imageAltEn,
-          imageAltBn: b.imageAltBn ?? cur.imageAltBn,
-          authorName: b.authorName ?? cur.authorName,
-          readTimeMinutes: Number(b.readTimeMinutes) || cur.readTimeMinutes,
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-          isFeatured: Boolean(b.isFeatured),
-          seoTitle: b.seoTitle ?? cur.seoTitle,
-          seoDescription: b.seoDescription ?? cur.seoDescription,
-          updatedAt: new Date().toISOString(),
-        };
-        store.articles[idx] = updated;
-        return res.json(updated);
-      }
-
       const updated = await db
         .update(articles)
         .set({
@@ -798,13 +573,7 @@ export function createApp(): express.Express {
 
   app.delete('/api/admin/articles/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.articles = store.articles.filter((a) => a.id !== id);
-        return res.json({ ok: true });
-      }
-      await db.delete(articles).where(eq(articles.id, id));
+      await db.delete(articles).where(eq(articles.id, Number(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       console.error('Delete article error:', error);
@@ -816,22 +585,6 @@ export function createApp(): express.Express {
   app.post('/api/admin/categories', requireAdmin, async (req, res) => {
     try {
       const b = req.body || {};
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const created = {
-          id: nextMemoryId(store),
-          slug: slugify(b.slug || b.nameEn || 'category'),
-          nameEn: b.nameEn,
-          nameBn: b.nameBn || b.nameEn,
-          descriptionEn: b.descriptionEn || '',
-          descriptionBn: b.descriptionBn || b.descriptionEn || '',
-          section: b.section || 'explore',
-          sortOrder: Number(b.sortOrder) || 0,
-        };
-        store.categories.push(created);
-        return res.status(201).json(created);
-      }
-
       const created = await db
         .insert(categories)
         .values({
@@ -853,13 +606,7 @@ export function createApp(): express.Express {
 
   app.delete('/api/admin/categories/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.categories = store.categories.filter((c) => c.id !== id);
-        return res.json({ ok: true });
-      }
-      await db.delete(categories).where(eq(categories.id, id));
+      await db.delete(categories).where(eq(categories.id, Number(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       console.error('Delete category error:', error);
@@ -871,37 +618,6 @@ export function createApp(): express.Express {
   app.post('/api/admin/destinations', requireAdmin, async (req, res) => {
     try {
       const b = req.body || {};
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const created = {
-          id: nextMemoryId(store),
-          slug: slugify(b.slug || b.nameEn || 'destination'),
-          nameEn: b.nameEn,
-          nameBn: b.nameBn || b.nameEn,
-          category: b.category || 'attraction',
-          summaryEn: b.summaryEn || '',
-          summaryBn: b.summaryBn || b.summaryEn || '',
-          descriptionEn: b.descriptionEn || b.summaryEn || '',
-          descriptionBn: b.descriptionBn || b.summaryBn || '',
-          locationText: b.locationText || 'Khulna, Bangladesh',
-          travelTipsEn: b.travelTipsEn || null,
-          travelTipsBn: b.travelTipsBn || null,
-          bestTimeEn: b.bestTimeEn || null,
-          bestTimeBn: b.bestTimeBn || null,
-          featuredImage:
-            b.featuredImage || '/src/assets/images/dest_sundarbans_mangrove_1794914379796.jpg',
-          imageAlt: b.imageAlt || b.nameEn,
-          isFeatured: Boolean(b.isFeatured),
-          isHiddenGem: Boolean(b.isHiddenGem),
-          isSampleData: Boolean(b.isSampleData),
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-          seoTitle: b.seoTitle || b.nameEn,
-          seoDescription: b.seoDescription || b.summaryEn || null,
-        };
-        store.destinations.unshift(created);
-        return res.status(201).json(created);
-      }
-
       const created = await db
         .insert(destinations)
         .values({
@@ -938,41 +654,7 @@ export function createApp(): express.Express {
 
   app.put('/api/admin/destinations/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
       const b = req.body || {};
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const idx = store.destinations.findIndex((d) => d.id === id);
-        if (idx === -1) return res.status(404).json({ error: 'Destination not found' });
-        const cur = store.destinations[idx];
-        const updated = {
-          ...cur,
-          nameEn: b.nameEn ?? cur.nameEn,
-          nameBn: b.nameBn ?? cur.nameBn,
-          category: b.category ?? cur.category,
-          summaryEn: b.summaryEn ?? cur.summaryEn,
-          summaryBn: b.summaryBn ?? cur.summaryBn,
-          descriptionEn: b.descriptionEn ?? cur.descriptionEn,
-          descriptionBn: b.descriptionBn ?? cur.descriptionBn,
-          locationText: b.locationText ?? cur.locationText,
-          travelTipsEn: b.travelTipsEn ?? cur.travelTipsEn,
-          travelTipsBn: b.travelTipsBn ?? cur.travelTipsBn,
-          bestTimeEn: b.bestTimeEn ?? cur.bestTimeEn,
-          bestTimeBn: b.bestTimeBn ?? cur.bestTimeBn,
-          featuredImage: b.featuredImage ?? cur.featuredImage,
-          imageAlt: b.imageAlt ?? cur.imageAlt,
-          isFeatured: Boolean(b.isFeatured),
-          isHiddenGem: Boolean(b.isHiddenGem),
-          isSampleData: Boolean(b.isSampleData),
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-          seoTitle: b.seoTitle ?? cur.seoTitle,
-          seoDescription: b.seoDescription ?? cur.seoDescription,
-        };
-        store.destinations[idx] = updated;
-        return res.json(updated);
-      }
-
       const updated = await db
         .update(destinations)
         .set({
@@ -997,7 +679,7 @@ export function createApp(): express.Express {
           seoTitle: b.seoTitle,
           seoDescription: b.seoDescription,
         })
-        .where(eq(destinations.id, id))
+        .where(eq(destinations.id, Number(req.params.id)))
         .returning();
       res.json(updated[0]);
     } catch (error) {
@@ -1008,13 +690,7 @@ export function createApp(): express.Express {
 
   app.delete('/api/admin/destinations/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.destinations = store.destinations.filter((d) => d.id !== id);
-        return res.json({ ok: true });
-      }
-      await db.delete(destinations).where(eq(destinations.id, id));
+      await db.delete(destinations).where(eq(destinations.id, Number(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       console.error('Delete destination error:', error);
@@ -1026,37 +702,6 @@ export function createApp(): express.Express {
   app.post('/api/admin/restaurants', requireAdmin, async (req, res) => {
     try {
       const b = req.body || {};
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const created = {
-          id: nextMemoryId(store),
-          slug: slugify(b.slug || b.nameEn || 'restaurant'),
-          nameEn: b.nameEn,
-          nameBn: b.nameBn || b.nameEn,
-          cuisineType: b.cuisineType || 'local',
-          specialtyEn: b.specialtyEn || '',
-          specialtyBn: b.specialtyBn || b.specialtyEn || '',
-          reviewEn: b.reviewEn || '',
-          reviewBn: b.reviewBn || b.reviewEn || '',
-          areaEn: b.areaEn || 'Khulna City',
-          areaBn: b.areaBn || 'খুলনা শহর',
-          address: b.address || null,
-          phone: b.phone || null,
-          priceRange: b.priceRange || null,
-          openingHours: b.openingHours || null,
-          featuredImage:
-            b.featuredImage || '/src/assets/images/food_khulna_chui_jhal_1794914380590.jpg',
-          imageAlt: b.imageAlt || b.nameEn,
-          isFeatured: Boolean(b.isFeatured),
-          isSampleData: Boolean(b.isSampleData),
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-          seoTitle: b.seoTitle || b.nameEn,
-          seoDescription: b.seoDescription || b.specialtyEn || null,
-        };
-        store.restaurants.unshift(created);
-        return res.status(201).json(created);
-      }
-
       const created = await db
         .insert(restaurants)
         .values({
@@ -1093,41 +738,7 @@ export function createApp(): express.Express {
 
   app.put('/api/admin/restaurants/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
       const b = req.body || {};
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const idx = store.restaurants.findIndex((r) => r.id === id);
-        if (idx === -1) return res.status(404).json({ error: 'Restaurant not found' });
-        const cur = store.restaurants[idx];
-        const updated = {
-          ...cur,
-          nameEn: b.nameEn ?? cur.nameEn,
-          nameBn: b.nameBn ?? cur.nameBn,
-          cuisineType: b.cuisineType ?? cur.cuisineType,
-          specialtyEn: b.specialtyEn ?? cur.specialtyEn,
-          specialtyBn: b.specialtyBn ?? cur.specialtyBn,
-          reviewEn: b.reviewEn ?? cur.reviewEn,
-          reviewBn: b.reviewBn ?? cur.reviewBn,
-          areaEn: b.areaEn ?? cur.areaEn,
-          areaBn: b.areaBn ?? cur.areaBn,
-          address: b.address || null,
-          phone: b.phone || null,
-          priceRange: b.priceRange || null,
-          openingHours: b.openingHours || null,
-          featuredImage: b.featuredImage ?? cur.featuredImage,
-          imageAlt: b.imageAlt ?? cur.imageAlt,
-          isFeatured: Boolean(b.isFeatured),
-          isSampleData: Boolean(b.isSampleData),
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-          seoTitle: b.seoTitle ?? cur.seoTitle,
-          seoDescription: b.seoDescription ?? cur.seoDescription,
-        };
-        store.restaurants[idx] = updated;
-        return res.json(updated);
-      }
-
       const updated = await db
         .update(restaurants)
         .set({
@@ -1152,7 +763,7 @@ export function createApp(): express.Express {
           seoTitle: b.seoTitle,
           seoDescription: b.seoDescription,
         })
-        .where(eq(restaurants.id, id))
+        .where(eq(restaurants.id, Number(req.params.id)))
         .returning();
       res.json(updated[0]);
     } catch (error) {
@@ -1163,13 +774,7 @@ export function createApp(): express.Express {
 
   app.delete('/api/admin/restaurants/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.restaurants = store.restaurants.filter((r) => r.id !== id);
-        return res.json({ ok: true });
-      }
-      await db.delete(restaurants).where(eq(restaurants.id, id));
+      await db.delete(restaurants).where(eq(restaurants.id, Number(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       console.error('Delete restaurant error:', error);
@@ -1181,31 +786,6 @@ export function createApp(): express.Express {
   app.post('/api/admin/businesses', requireAdmin, async (req, res) => {
     try {
       const b = req.body || {};
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const created = {
-          id: nextMemoryId(store),
-          slug: slugify(b.slug || b.nameEn || 'business'),
-          nameEn: b.nameEn,
-          nameBn: b.nameBn || b.nameEn,
-          businessType: b.businessType || 'shop',
-          descriptionEn: b.descriptionEn || '',
-          descriptionBn: b.descriptionBn || b.descriptionEn || '',
-          area: b.area || 'Khulna City',
-          address: b.address || null,
-          phone: b.phone || null,
-          websiteUrl: b.websiteUrl || null,
-          mapQuery: b.mapQuery || `${b.nameEn} Khulna Bangladesh`,
-          featuredImage:
-            b.featuredImage || '/src/assets/images/lifestyle_khulna_street_1794914380876.jpg',
-          isFeatured: Boolean(b.isFeatured),
-          isSampleData: Boolean(b.isSampleData),
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-        };
-        store.businesses.unshift(created);
-        return res.status(201).json(created);
-      }
-
       const created = await db
         .insert(businesses)
         .values({
@@ -1236,13 +816,7 @@ export function createApp(): express.Express {
 
   app.delete('/api/admin/businesses/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.businesses = store.businesses.filter((b) => b.id !== id);
-        return res.json({ ok: true });
-      }
-      await db.delete(businesses).where(eq(businesses.id, id));
+      await db.delete(businesses).where(eq(businesses.id, Number(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       console.error('Delete business error:', error);
@@ -1255,26 +829,6 @@ export function createApp(): express.Express {
     try {
       const b = req.body || {};
       const youtubeId = extractYoutubeId(b.youtubeUrl || '');
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const created = {
-          id: nextMemoryId(store),
-          titleEn: b.titleEn,
-          titleBn: b.titleBn || b.titleEn,
-          youtubeUrl: b.youtubeUrl,
-          youtubeId,
-          descriptionEn: b.descriptionEn || '',
-          descriptionBn: b.descriptionBn || b.descriptionEn || '',
-          category: b.category || 'Travel Vlog',
-          isFeatured: Boolean(b.isFeatured),
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-          publishedAt: new Date().toISOString(),
-        };
-        store.videos.unshift(created);
-        return res.status(201).json(created);
-      }
-
       const created = await db
         .insert(videos)
         .values({
@@ -1298,13 +852,7 @@ export function createApp(): express.Express {
 
   app.delete('/api/admin/videos/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.videos = store.videos.filter((v) => v.id !== id);
-        return res.json({ ok: true });
-      }
-      await db.delete(videos).where(eq(videos.id, id));
+      await db.delete(videos).where(eq(videos.id, Number(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       console.error('Delete video error:', error);
@@ -1316,30 +864,6 @@ export function createApp(): express.Express {
   app.post('/api/admin/events', requireAdmin, async (req, res) => {
     try {
       const b = req.body || {};
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const created = {
-          id: nextMemoryId(store),
-          slug: slugify(b.slug || b.titleEn || 'event'),
-          titleEn: b.titleEn,
-          titleBn: b.titleBn || b.titleEn,
-          eventType: b.eventType || 'cultural',
-          descriptionEn: b.descriptionEn || '',
-          descriptionBn: b.descriptionBn || b.descriptionEn || '',
-          venueEn: b.venueEn || 'Khulna, Bangladesh',
-          venueBn: b.venueBn || 'খুলনা, বাংলাদেশ',
-          eventDate: b.eventDate || new Date().toISOString().slice(0, 10),
-          dateLabelEn: b.dateLabelEn || b.eventDate || 'Upcoming',
-          dateLabelBn: b.dateLabelBn || b.dateLabelEn || 'আসন্ন',
-          featuredImage:
-            b.featuredImage || '/src/assets/images/lifestyle_khulna_street_1794914380876.jpg',
-          isSampleData: Boolean(b.isSampleData),
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-        };
-        store.events.unshift(created);
-        return res.status(201).json(created);
-      }
-
       const created = await db
         .insert(events)
         .values({
@@ -1369,13 +893,7 @@ export function createApp(): express.Express {
 
   app.delete('/api/admin/events/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.events = store.events.filter((e) => e.id !== id);
-        return res.json({ ok: true });
-      }
-      await db.delete(events).where(eq(events.id, id));
+      await db.delete(events).where(eq(events.id, Number(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       console.error('Delete event error:', error);
@@ -1389,28 +907,6 @@ export function createApp(): express.Express {
       const b = req.body || {};
       const youtubeId =
         b.mediaType === 'video' ? extractYoutubeId(b.mediaUrl || '') : null;
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const created = {
-          id: nextMemoryId(store),
-          titleEn: b.titleEn,
-          titleBn: b.titleBn || b.titleEn,
-          captionEn: b.captionEn || '',
-          captionBn: b.captionBn || b.captionEn || '',
-          locationEn: b.locationEn || 'Khulna, Bangladesh',
-          locationBn: b.locationBn || 'খুলনা, বাংলাদেশ',
-          mediaType: (b.mediaType === 'video' ? 'video' : 'photo') as 'photo' | 'video',
-          mediaUrl: b.mediaUrl,
-          youtubeId,
-          category: b.category || 'Khulna',
-          isFeatured: Boolean(b.isFeatured),
-          status: (b.status === 'draft' ? 'draft' : 'published') as 'draft' | 'published',
-        };
-        store.galleryItems.unshift(created);
-        return res.status(201).json(created);
-      }
-
       const created = await db
         .insert(galleryItems)
         .values({
@@ -1437,13 +933,7 @@ export function createApp(): express.Express {
 
   app.delete('/api/admin/gallery/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.galleryItems = store.galleryItems.filter((g) => g.id !== id);
-        return res.json({ ok: true });
-      }
-      await db.delete(galleryItems).where(eq(galleryItems.id, id));
+      await db.delete(galleryItems).where(eq(galleryItems.id, Number(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       console.error('Delete gallery item error:', error);
@@ -1454,23 +944,13 @@ export function createApp(): express.Express {
   // Admin: Contacts & Users management
   app.patch('/api/admin/contacts/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
       const status = ['unread', 'read', 'replied'].includes(req.body?.status)
         ? req.body.status
         : 'read';
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const found = store.contacts.find((c) => c.id === id);
-        if (!found) return res.status(404).json({ error: 'Contact not found' });
-        found.status = status;
-        return res.json(found);
-      }
-
       const updated = await db
         .update(contactSubmissions)
         .set({ status })
-        .where(eq(contactSubmissions.id, id))
+        .where(eq(contactSubmissions.id, Number(req.params.id)))
         .returning();
       res.json(updated[0]);
     } catch (error) {
@@ -1481,13 +961,9 @@ export function createApp(): express.Express {
 
   app.delete('/api/admin/contacts/:id', requireAdmin, async (req, res) => {
     try {
-      const id = Number(req.params.id);
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.contacts = store.contacts.filter((c) => c.id !== id);
-        return res.json({ ok: true });
-      }
-      await db.delete(contactSubmissions).where(eq(contactSubmissions.id, id));
+      await db
+        .delete(contactSubmissions)
+        .where(eq(contactSubmissions.id, Number(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       console.error('Delete contact error:', error);
@@ -1499,20 +975,6 @@ export function createApp(): express.Express {
     try {
       const targetId = Number(req.params.id);
       const role = req.body?.role === 'admin' ? 'admin' : 'viewer';
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        const found = store.users.find((u) => u.id === targetId);
-        if (!found) return res.status(404).json({ error: 'User not found' });
-        if (isSuperAdminEmail(found.email) && role !== 'admin') {
-          return res
-            .status(403)
-            .json({ error: 'Super administrator accounts cannot be demoted.' });
-        }
-        found.role = role;
-        return res.json(found);
-      }
-
       const existing = await db
         .select()
         .from(users)
@@ -1544,29 +1006,6 @@ export function createApp(): express.Express {
   app.put('/api/admin/settings', requireAdmin, async (req, res) => {
     try {
       const b = req.body || {};
-
-      if (!isPostgresConfigured()) {
-        const store = getMemoryStore();
-        store.settings = {
-          ...store.settings,
-          siteName: b.siteName ?? store.settings.siteName,
-          taglineEn: b.taglineEn ?? store.settings.taglineEn,
-          taglineBn: b.taglineBn ?? store.settings.taglineBn,
-          heroHeadlineEn: b.heroHeadlineEn ?? store.settings.heroHeadlineEn,
-          heroHeadlineBn: b.heroHeadlineBn ?? store.settings.heroHeadlineBn,
-          heroSubtitleEn: b.heroSubtitleEn ?? store.settings.heroSubtitleEn,
-          heroSubtitleBn: b.heroSubtitleBn ?? store.settings.heroSubtitleBn,
-          facebookUrl: b.facebookUrl ?? store.settings.facebookUrl,
-          youtubeUrl: b.youtubeUrl ?? store.settings.youtubeUrl,
-          contactEmail: b.contactEmail ?? store.settings.contactEmail,
-          defaultSeoTitle: b.defaultSeoTitle ?? store.settings.defaultSeoTitle,
-          defaultSeoDescription:
-            b.defaultSeoDescription ?? store.settings.defaultSeoDescription,
-          updatedAt: new Date().toISOString(),
-        };
-        return res.json(store.settings);
-      }
-
       const existing = await db.select().from(siteSettings).limit(1);
       if (existing.length === 0) {
         const created = await db
@@ -1622,6 +1061,11 @@ export function createApp(): express.Express {
       console.error('Update settings error:', error);
       res.status(500).json({ error: 'Failed to update website settings' });
     }
+  });
+
+  // Never serve index.html for unknown /api/* requests
+  app.all('/api/*', (_req, res) => {
+    res.status(404).json({ error: 'API route not found' });
   });
 
   return app;

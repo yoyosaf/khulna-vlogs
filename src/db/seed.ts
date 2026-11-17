@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { db } from './index.ts';
+import { db } from './index';
 import {
   articles,
   businesses,
@@ -10,7 +10,7 @@ import {
   restaurants,
   siteSettings,
   videos,
-} from './schema.ts';
+} from './schema';
 
 let seedPromise: Promise<void> | null = null;
 

@@ -3,7 +3,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { createApp } from './src/server/createApp.ts';
+import { createApp } from './src/server/createApp';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3000;

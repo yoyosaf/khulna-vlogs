@@ -1,7 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { db, isPostgresConfigured } from './index.ts';
-import { getOrCreateMemoryUser } from './memoryStore.ts';
-import { users } from './schema.ts';
+import { db, isPostgresConfigured } from './index';
+import { users } from './schema';
 
 export const SUPER_ADMIN_EMAILS = [
   'babayoyosaf@gmail.com',
@@ -24,23 +23,27 @@ export function isSuperAdminEmail(email?: string | null): boolean {
   );
 }
 
+export class DatabaseNotConfiguredError extends Error {
+  constructor() {
+    super(
+      'PostgreSQL database is not configured for this environment. Set SQL_HOST, SQL_USER, SQL_PASSWORD, and SQL_DB_NAME in environment variables.'
+    );
+    this.name = 'DatabaseNotConfiguredError';
+  }
+}
+
 export async function getOrCreateUser(
   uid: string,
   email: string,
   displayName?: string | null
 ) {
+  if (!isPostgresConfigured()) {
+    throw new DatabaseNotConfiguredError();
+  }
+
   const normalizedEmail = email.trim().toLowerCase();
   const allowedAdmins = getAllowedAdminEmails();
   const isAuthorizedAdmin = allowedAdmins.includes(normalizedEmail);
-
-  if (!isPostgresConfigured()) {
-    return getOrCreateMemoryUser(
-      uid,
-      email,
-      displayName || null,
-      isAuthorizedAdmin
-    );
-  }
 
   try {
     const existing = await db
