@@ -3,15 +3,23 @@ import {
   User,
   browserLocalPersistence,
   browserSessionPersistence,
+  getRedirectResult,
   onAuthStateChanged,
   sendPasswordResetEmail,
   setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut as firebaseSignOut,
 } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase';
 import { UserProfile } from '../types';
+
+interface AuthActionResult {
+  ok: boolean;
+  error?: string;
+  errorCode?: string;
+}
 
 interface AuthContextValue {
   firebaseUser: User | null;
@@ -22,9 +30,10 @@ interface AuthContextValue {
     email: string,
     password: string,
     rememberMe: boolean
-  ) => Promise<{ ok: boolean; error?: string }>;
-  resetPassword: (email: string) => Promise<{ ok: boolean; error?: string }>;
-  signInWithGoogle: () => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<AuthActionResult>;
+  resetPassword: (email: string) => Promise<AuthActionResult>;
+  signInWithGoogle: () => Promise<AuthActionResult>;
+  signInWithGoogleRedirect: () => Promise<AuthActionResult>;
   signOut: () => Promise<void>;
   getIdToken: () => Promise<string | null>;
   refreshProfile: () => Promise<void>;
@@ -46,6 +55,12 @@ function formatFirebaseAuthError(code?: string, fallback?: string): string {
       return 'Email/Password sign-in is not yet enabled in Firebase Authentication. Enable Email/Password in your Firebase Console (Authentication → Sign-in method) or sign in with your authorized Google account below.';
     case 'auth/popup-closed-by-user':
       return 'Google sign-in popup was closed before completion.';
+    case 'auth/cancelled-popup-request':
+      return 'Sign-in popup request was cancelled. Click the button once and complete sign-in in the popup.';
+    case 'auth/popup-blocked':
+      return 'Your browser blocked the Google Sign-In popup window. Allow pop-ups for this site in Chrome, or use the fallback option below.';
+    case 'auth/unauthorized-domain':
+      return 'This domain is not authorized in Firebase Authentication. Add it under Firebase Console → Authentication → Settings → Authorized domains.';
     default:
       return fallback || 'Authentication failed. Please try again.';
   }
@@ -93,19 +108,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
+    let mounted = true;
+
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (!mounted || !result?.user) return;
+        const synced = await syncProfile(result.user);
+        if (!synced || synced.role !== 'admin') {
+          await firebaseSignOut(auth);
+          if (mounted) {
+            setProfile(null);
+            setAuthError(
+              'Access denied. This Google account is not authorized as a Khulna Vlogs administrator.'
+            );
+          }
+        }
+      })
+      .catch((err: any) => {
+        if (!mounted) return;
+        if (err?.code) {
+          setAuthError(formatFirebaseAuthError(err.code, err.message));
+        }
+      });
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!mounted) return;
       setFirebaseUser(user);
       await syncProfile(user);
-      setLoading(false);
+      if (mounted) setLoading(false);
     });
-    return () => unsubscribe();
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
   }, []);
 
   const signInWithEmail = async (
     email: string,
     password: string,
     rememberMe: boolean
-  ): Promise<{ ok: boolean; error?: string }> => {
+  ): Promise<AuthActionResult> => {
     setAuthError(null);
     try {
       await setPersistence(
@@ -125,24 +168,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err: any) {
       const msg = formatFirebaseAuthError(err?.code, err?.message);
       setAuthError(msg);
-      return { ok: false, error: msg };
+      return { ok: false, error: msg, errorCode: err?.code };
     }
   };
 
-  const resetPassword = async (
-    email: string
-  ): Promise<{ ok: boolean; error?: string }> => {
+  const resetPassword = async (email: string): Promise<AuthActionResult> => {
     setAuthError(null);
     try {
       await sendPasswordResetEmail(auth, email.trim());
       return { ok: true };
     } catch (err: any) {
       const msg = formatFirebaseAuthError(err?.code, err?.message);
-      return { ok: false, error: msg };
+      return { ok: false, error: msg, errorCode: err?.code };
     }
   };
 
-  const signInWithGoogle = async (): Promise<{ ok: boolean; error?: string }> => {
+  const signInWithGoogle = async (): Promise<AuthActionResult> => {
     setAuthError(null);
     try {
       const result = await signInWithPopup(auth, googleAuthProvider);
@@ -159,7 +200,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err: any) {
       const msg = formatFirebaseAuthError(err?.code, err?.message);
       setAuthError(msg);
-      return { ok: false, error: msg };
+      return { ok: false, error: msg, errorCode: err?.code };
+    }
+  };
+
+  const signInWithGoogleRedirect = async (): Promise<AuthActionResult> => {
+    setAuthError(null);
+    try {
+      await signInWithRedirect(auth, googleAuthProvider);
+      return { ok: true };
+    } catch (err: any) {
+      const msg = formatFirebaseAuthError(err?.code, err?.message);
+      setAuthError(msg);
+      return { ok: false, error: msg, errorCode: err?.code };
     }
   };
 
@@ -188,6 +241,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInWithEmail,
         resetPassword,
         signInWithGoogle,
+        signInWithGoogleRedirect,
         signOut,
         getIdToken,
         refreshProfile,

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, Eye, EyeOff, Lock, Mail } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Eye, EyeOff, Lock, Mail } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { BRAND_LOGO_URL } from '../i18n/translations';
 import { SeoHead } from './SeoHead';
@@ -13,7 +13,13 @@ export function AdminLoginPage({
   onSuccessRedirect,
   onBackPublic,
 }: AdminLoginPageProps) {
-  const { signInWithEmail, signInWithGoogle, resetPassword, authError } = useAuth();
+  const {
+    signInWithEmail,
+    signInWithGoogle,
+    signInWithGoogleRedirect,
+    resetPassword,
+    authError,
+  } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -21,6 +27,7 @@ export function AdminLoginPage({
   const [rememberMe, setRememberMe] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [popupBlocked, setPopupBlocked] = useState(false);
   const [forgotMode, setForgotMode] = useState(false);
   const [resetSent, setResetSent] = useState<string | null>(null);
 
@@ -81,18 +88,46 @@ export function AdminLoginPage({
   const handleGoogleLogin = async () => {
     setValidationError(null);
     setResetSent(null);
+    setPopupBlocked(false);
     setSubmitting(true);
     try {
       const res = await signInWithGoogle();
       if (res.ok) {
         onSuccessRedirect();
-      } else if (res.error) {
+      } else {
+        if (res.errorCode === 'auth/popup-blocked') {
+          setPopupBlocked(true);
+        }
+        if (res.error) {
+          setValidationError(res.error);
+        }
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGoogleRedirectLogin = async () => {
+    setValidationError(null);
+    setResetSent(null);
+    setSubmitting(true);
+    try {
+      const res = await signInWithGoogleRedirect();
+      if (!res.ok && res.error) {
         setValidationError(res.error);
       }
     } finally {
       setSubmitting(false);
     }
   };
+
+  const isInsideIframe = (() => {
+    try {
+      return window.self !== window.top;
+    } catch {
+      return true;
+    }
+  })();
 
   const activeError = validationError || authError;
 
@@ -124,9 +159,36 @@ export function AdminLoginPage({
         {activeError && (
           <div
             role="alert"
-            className="mb-5 text-xs leading-relaxed text-red-800 bg-red-50 border border-red-200 rounded-lg p-3.5"
+            className="mb-5 text-xs leading-relaxed text-red-800 bg-red-50 border border-red-200 rounded-lg p-3.5 space-y-2.5"
           >
-            {activeError}
+            <p>{activeError}</p>
+            {popupBlocked && (
+              <div className="pt-2 border-t border-red-200/80 space-y-2 text-[#102C40]">
+                <p className="text-[11px] text-red-900/90">
+                  In Chrome: click the <strong>Pop-up blocked</strong> icon at the right of the address bar, select <strong>Always allow pop-ups and redirects</strong>, then click Sign In again.
+                </p>
+                {isInsideIframe ? (
+                  <a
+                    href="/admin/login"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#102C40] hover:bg-[#193F5B] rounded-md"
+                  >
+                    <span>Open Login in New Tab</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={handleGoogleRedirectLogin}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#102C40] hover:bg-[#193F5B] rounded-md"
+                  >
+                    Try Redirect Sign-In Instead
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
 
