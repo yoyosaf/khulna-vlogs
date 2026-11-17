@@ -1,0 +1,6 @@
+{
+  "name": "Khulna Vlogs – Explore, Travel & Discover Khulna",
+  "description": "Official digital city guide, travel magazine, food directory, and local discovery platform for Khulna, Bangladesh.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
