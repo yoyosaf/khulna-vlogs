@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { db, isPostgresConfigured } from './index';
-import { users } from './schema';
+import { db, isPostgresConfigured } from './index.js';
+import { users } from './schema.js';
 
 export const SUPER_ADMIN_EMAILS = [
   'babayoyosaf@gmail.com',
@@ -88,8 +88,16 @@ export async function getOrCreateUser(
       .returning();
 
     return result[0];
-  } catch (error) {
-    console.error('Database error in getOrCreateUser:', error);
+  } catch (error: any) {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        scope: 'db/users',
+        event: 'get_or_create_user_failed',
+        errorCode: error?.code || null,
+        errorMessage: error?.message || String(error),
+      })
+    );
     throw new Error('Failed to synchronize user profile.', { cause: error });
   }
 }

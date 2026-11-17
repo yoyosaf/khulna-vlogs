@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { DecodedIdToken } from 'firebase-admin/auth';
-import { adminAuth } from '../lib/firebase-admin';
-import { DatabaseNotConfiguredError, getOrCreateUser } from '../db/users';
+import { getAdminAuth } from '../lib/firebase-admin.js';
+import { DatabaseNotConfiguredError, getOrCreateUser } from '../db/users.js';
 
 export interface AuthRequest extends Request {
   user?: DecodedIdToken;
@@ -24,15 +24,43 @@ export const requireAuth = async (
     return res.status(401).json({ error: 'Unauthorized: Missing token' });
   }
 
-  const token = authHeader.split('Bearer ')[1];
+  const token = authHeader.slice('Bearer '.length).trim();
+  if (!token) {
+    return res.status(401).json({ error: 'Unauthorized: Missing token' });
+  }
+
+  let authClient;
+  try {
+    authClient = getAdminAuth();
+  } catch (initError: any) {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        scope: 'middleware/auth',
+        event: 'firebase_admin_unavailable',
+        errorCode: initError?.code || null,
+        errorMessage: initError?.message || String(initError),
+      })
+    );
+    return res.status(500).json({ error: 'Authentication service initialization failed' });
+  }
+
   let decodedToken: DecodedIdToken;
   try {
-    decodedToken = await adminAuth.verifyIdToken(token);
+    decodedToken = await authClient.verifyIdToken(token);
     req.user = decodedToken;
   } catch (error: any) {
-    console.error('Error verifying Firebase ID token:', error);
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        scope: 'middleware/auth',
+        event: 'invalid_id_token',
+        errorCode: error?.code || null,
+        errorMessage: error?.message || String(error),
+      })
+    );
     return res.status(401).json({
-      error: `Unauthorized: ${error?.code || error?.message || 'Invalid token'}`,
+      error: `Unauthorized: ${error?.code || 'Invalid token'}`,
     });
   }
 
@@ -48,7 +76,15 @@ export const requireAuth = async (
     if (error instanceof DatabaseNotConfiguredError) {
       return res.status(503).json({ error: error.message });
     }
-    console.error('Database error during auth verification:', error);
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        scope: 'middleware/auth',
+        event: 'db_user_sync_failed',
+        errorCode: error?.code || null,
+        errorMessage: error?.message || String(error),
+      })
+    );
     return res.status(500).json({ error: 'Failed to load user profile from database' });
   }
 };

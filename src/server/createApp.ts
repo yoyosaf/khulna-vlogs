@@ -1,6 +1,6 @@
 import express from 'express';
 import { asc, desc, eq, ilike, or } from 'drizzle-orm';
-import { db, isPostgresConfigured } from '../db/index';
+import { db, isPostgresConfigured } from '../db/index.js';
 import {
   articles,
   businesses,
@@ -15,10 +15,10 @@ import {
   siteSettings,
   users,
   videos,
-} from '../db/schema';
-import { ensureSeeded } from '../db/seed';
-import { isSuperAdminEmail } from '../db/users';
-import { AuthRequest, requireAdmin, requireAuth } from '../middleware/auth';
+} from '../db/schema.js';
+import { ensureSeeded } from '../db/seed.js';
+import { isSuperAdminEmail } from '../db/users.js';
+import { AuthRequest, requireAdmin, requireAuth } from '../middleware/auth.js';
 
 function extractYoutubeId(url: string): string {
   if (!url) return '';
@@ -1067,6 +1067,31 @@ export function createApp(): express.Express {
   app.all('/api/*', (_req, res) => {
     res.status(404).json({ error: 'API route not found' });
   });
+
+  // Safe structured Express error handler (never exposes secrets)
+  app.use(
+    (
+      err: any,
+      req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction
+    ) => {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          scope: 'express',
+          event: 'unhandled_route_error',
+          method: req.method,
+          path: req.path,
+          errorName: err?.name || 'Error',
+          errorCode: err?.code || null,
+          errorMessage: err?.message || String(err),
+        })
+      );
+      if (res.headersSent) return;
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  );
 
   return app;
 }

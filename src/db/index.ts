@@ -1,9 +1,10 @@
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
-import * as schema from './schema';
+import * as schema from './schema.js';
 
 declare global {
   var _postgresPool: Pool | undefined;
+  var _drizzleDb: NodePgDatabase<typeof schema> | undefined;
 }
 
 export function isPostgresConfigured(): boolean {
@@ -16,11 +17,12 @@ export function isPostgresConfigured(): boolean {
   return true;
 }
 
-export const createPool = () => {
+export const createPool = (): Pool => {
   if (!global._postgresPool) {
+    const parsedPort = process.env.SQL_PORT ? Number(process.env.SQL_PORT) : undefined;
     global._postgresPool = new Pool({
       host: process.env.SQL_HOST,
-      port: process.env.SQL_PORT ? Number(process.env.SQL_PORT) : undefined,
+      port: Number.isFinite(parsedPort) ? parsedPort : undefined,
       user: process.env.SQL_USER,
       password: process.env.SQL_PASSWORD,
       database: process.env.SQL_DB_NAME,
@@ -33,11 +35,33 @@ export const createPool = () => {
     });
 
     global._postgresPool.on('error', (err) => {
-      console.error('Unexpected error on idle SQL pool client:', err);
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          scope: 'postgres-pool',
+          event: 'idle_client_error',
+          errorMessage: err?.message || String(err),
+        })
+      );
     });
   }
   return global._postgresPool;
 };
 
-const pool = createPool();
-export const db = drizzle(pool, { schema });
+export function getDb(): NodePgDatabase<typeof schema> {
+  if (!global._drizzleDb) {
+    global._drizzleDb = drizzle(createPool(), { schema });
+  }
+  return global._drizzleDb;
+}
+
+export const db: NodePgDatabase<typeof schema> = new Proxy(
+  {} as NodePgDatabase<typeof schema>,
+  {
+    get(_target, prop, receiver) {
+      const instance = getDb();
+      const value = Reflect.get(instance, prop, receiver);
+      return typeof value === 'function' ? value.bind(instance) : value;
+    },
+  }
+);
