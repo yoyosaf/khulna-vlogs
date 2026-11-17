@@ -59,8 +59,11 @@ function formatFirebaseAuthError(code?: string, fallback?: string): string {
       return 'Sign-in popup request was cancelled. Click the button once and complete sign-in in the popup.';
     case 'auth/popup-blocked':
       return 'Your browser blocked the Google Sign-In popup window. Allow pop-ups for this site in Chrome, or use the fallback option below.';
-    case 'auth/unauthorized-domain':
-      return 'This domain is not authorized in Firebase Authentication. Add it under Firebase Console → Authentication → Settings → Authorized domains.';
+    case 'auth/unauthorized-domain': {
+      const host =
+        typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+      return `Domain "${host}" is not authorized in Firebase Authentication yet. Add "${host}" in Firebase Console (project: eternal-episode-sw2pc) → Authentication → Settings → Authorized domains.`;
+    }
     default:
       return fallback || 'Authentication failed. Please try again.';
   }

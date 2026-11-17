@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { db } from './index.ts';
+import { db, isPostgresConfigured } from './index.ts';
+import { getOrCreateMemoryUser } from './memoryStore.ts';
 import { users } from './schema.ts';
 
 export const SUPER_ADMIN_EMAILS = [
@@ -28,11 +29,20 @@ export async function getOrCreateUser(
   email: string,
   displayName?: string | null
 ) {
-  try {
-    const normalizedEmail = email.trim().toLowerCase();
-    const allowedAdmins = getAllowedAdminEmails();
-    const isAuthorizedAdmin = allowedAdmins.includes(normalizedEmail);
+  const normalizedEmail = email.trim().toLowerCase();
+  const allowedAdmins = getAllowedAdminEmails();
+  const isAuthorizedAdmin = allowedAdmins.includes(normalizedEmail);
 
+  if (!isPostgresConfigured()) {
+    return getOrCreateMemoryUser(
+      uid,
+      email,
+      displayName || null,
+      isAuthorizedAdmin
+    );
+  }
+
+  try {
     const existing = await db
       .select()
       .from(users)
