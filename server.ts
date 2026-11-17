@@ -21,6 +21,7 @@ import {
   videos,
 } from './src/db/schema.ts';
 import { ensureSeeded } from './src/db/seed.ts';
+import { isSuperAdminEmail } from './src/db/users.ts';
 import { AuthRequest, requireAdmin, requireAuth } from './src/middleware/auth.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -951,11 +952,27 @@ async function startServer() {
 
   app.patch('/api/admin/users/:id/role', requireAdmin, async (req, res) => {
     try {
+      const targetId = Number(req.params.id);
       const role = req.body?.role === 'admin' ? 'admin' : 'viewer';
+      const existing = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, targetId))
+        .limit(1);
+
+      if (existing.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      if (isSuperAdminEmail(existing[0].email) && role !== 'admin') {
+        return res
+          .status(403)
+          .json({ error: 'Super administrator accounts cannot be demoted.' });
+      }
+
       const updated = await db
         .update(users)
         .set({ role })
-        .where(eq(users.id, Number(req.params.id)))
+        .where(eq(users.id, targetId))
         .returning();
       res.json(updated[0]);
     } catch (error) {
