@@ -9,6 +9,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { AdminLoginPage } from './components/AdminLoginPage';
 import { AdminSection, BootstrapPayload, Language, PageRoute } from './types';
 import { copy } from './i18n/translations';
+import { FALLBACK_BOOTSTRAP_DATA } from './data/fallbackData';
 
 type ParsedRoute =
   | { kind: 'public'; page: Exclude<PageRoute, 'admin'>; slug?: string }
@@ -80,12 +81,18 @@ function KhulnaVlogsShell() {
   const fetchBootstrap = useCallback(async () => {
     try {
       const res = await fetch('/api/public/bootstrap');
-      if (!res.ok) throw new Error('Unable to load Khulna Vlogs content.');
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.includes('application/json')) {
+        setData(FALLBACK_BOOTSTRAP_DATA);
+        setLoadError(null);
+        return;
+      }
       const json: BootstrapPayload = await res.json();
       setData(json);
       setLoadError(null);
-    } catch (err: any) {
-      setLoadError(err.message || 'Connection error');
+    } catch {
+      setData(FALLBACK_BOOTSTRAP_DATA);
+      setLoadError(null);
     }
   }, []);
 

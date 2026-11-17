@@ -45,7 +45,54 @@ export function HomePage({ data, lang, onNavigate }: HomePageProps) {
   const [searchResults, setSearchResults] = useState<SearchResultState | null>(null);
   const [activeVideo, setActiveVideo] = useState<VideoItem | null>(null);
   const [newsletterEmail, setNewsletterEmail] = useState('');
-  const [newsletterStatus, setNewsletterStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [newsletterStatus, setNewsletterStatus] = useState<
+    'idle' | 'saving' | 'saved' | 'error' | 'unavailable'
+  >('idle');
+
+  const runClientSearch = (needle: string): SearchResultState => {
+    const q = needle.toLowerCase();
+    const includes = (val?: string | null) =>
+      Boolean(val && val.toLowerCase().includes(q));
+    return {
+      articles: data.articles.filter(
+        (a) =>
+          includes(a.titleEn) ||
+          includes(a.titleBn) ||
+          includes(a.excerptEn) ||
+          includes(a.excerptBn)
+      ),
+      destinations: data.destinations.filter(
+        (d) =>
+          includes(d.nameEn) ||
+          includes(d.nameBn) ||
+          includes(d.summaryEn) ||
+          includes(d.summaryBn) ||
+          includes(d.locationText)
+      ),
+      restaurants: data.restaurants.filter(
+        (r) =>
+          includes(r.nameEn) ||
+          includes(r.nameBn) ||
+          includes(r.specialtyEn) ||
+          includes(r.specialtyBn) ||
+          includes(r.areaEn)
+      ),
+      businesses: data.businesses.filter(
+        (b) =>
+          includes(b.nameEn) ||
+          includes(b.nameBn) ||
+          includes(b.descriptionEn) ||
+          includes(b.area)
+      ),
+      events: data.events.filter(
+        (ev) =>
+          includes(ev.titleEn) ||
+          includes(ev.titleBn) ||
+          includes(ev.venueEn) ||
+          includes(ev.descriptionEn)
+      ),
+    };
+  };
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,10 +104,15 @@ export function HomePage({ data, lang, onNavigate }: HomePageProps) {
     setSearching(true);
     try {
       const res = await fetch(`/api/public/search?q=${encodeURIComponent(trimmed)}`);
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const json = await res.json();
         setSearchResults(json);
+      } else {
+        setSearchResults(runClientSearch(trimmed));
       }
+    } catch {
+      setSearchResults(runClientSearch(trimmed));
     } finally {
       setSearching(false);
     }
@@ -81,6 +133,11 @@ export function HomePage({ data, lang, onNavigate }: HomePageProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: newsletterEmail.trim(), language: lang }),
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.status === 404 || res.status === 405 || !contentType.includes('application/json')) {
+        setNewsletterStatus('unavailable');
+        return;
+      }
       if (res.ok) {
         setNewsletterStatus('saved');
         setNewsletterEmail('');
@@ -88,7 +145,7 @@ export function HomePage({ data, lang, onNavigate }: HomePageProps) {
         setNewsletterStatus('error');
       }
     } catch {
-      setNewsletterStatus('error');
+      setNewsletterStatus('unavailable');
     }
   };
 
@@ -858,6 +915,11 @@ export function HomePage({ data, lang, onNavigate }: HomePageProps) {
               {newsletterStatus === 'error' && (
                 <p className="text-xs font-medium text-red-700">
                   Unable to subscribe right now. Please verify your email address.
+                </p>
+              )}
+              {newsletterStatus === 'unavailable' && (
+                <p className="text-xs font-medium text-[#102C40]/75">
+                  Newsletter storage requires the full-stack backend server. Follow @thekhulnavlogs on Facebook or YouTube for updates.
                 </p>
               )}
             </form>

@@ -49,7 +49,9 @@ export function DirectoryPages({
     subject: '',
     message: '',
   });
-  const [contactState, setContactState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [contactState, setContactState] = useState<
+    'idle' | 'sending' | 'sent' | 'error' | 'unavailable'
+  >('idle');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -72,6 +74,11 @@ export function DirectoryPages({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(contactForm),
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (res.status === 404 || res.status === 405 || !contentType.includes('application/json')) {
+        setContactState('unavailable');
+        return;
+      }
       if (res.ok) {
         setContactState('sent');
         setContactForm({ name: '', email: '', subject: '', message: '' });
@@ -79,7 +86,7 @@ export function DirectoryPages({
         setContactState('error');
       }
     } catch {
-      setContactState('error');
+      setContactState('unavailable');
     }
   };
 
@@ -991,6 +998,11 @@ export function DirectoryPages({
             {contactState === 'error' && (
               <p className="text-sm font-medium text-red-700">
                 Could not submit message. Please try again.
+              </p>
+            )}
+            {contactState === 'unavailable' && (
+              <p className="text-sm font-medium text-[#102C40]/80">
+                Contact form storage requires the full-stack backend server. Please reach out directly via Facebook (@thekhulnavlogs).
               </p>
             )}
           </form>
