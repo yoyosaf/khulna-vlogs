@@ -66,16 +66,21 @@ function formatFirebaseAuthError(code?: string, fallback?: string): string {
   }
 }
 
+interface SyncProfileResult {
+  user: UserProfile | null;
+  error?: string;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const syncProfile = async (user: User | null): Promise<UserProfile | null> => {
+  const syncProfile = async (user: User | null): Promise<SyncProfileResult> => {
     if (!user) {
       setProfile(null);
-      return null;
+      return { user: null };
     }
     try {
       const token = await user.getIdToken();
@@ -85,9 +90,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         },
       });
       const contentType = res.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
+      if (
+        res.status === 404 ||
+        res.status === 405 ||
+        !contentType.includes('application/json')
+      ) {
         throw new Error(
-          'Administrator authentication requires the full-stack backend server.'
+          'Admin login requires the full-stack backend server (open your AI Studio app URL). Static hosting like Vercel cannot run server.ts or Cloud SQL.'
         );
       }
       if (!res.ok) {
@@ -98,12 +107,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const synced: UserProfile | null = data.user || null;
       setProfile(synced);
       setAuthError(null);
-      return synced;
+      return { user: synced };
     } catch (err: any) {
+      const message = err?.message || 'Authentication check failed';
       console.error('Auth sync error:', err);
-      setAuthError(err.message || 'Authentication check failed');
+      setAuthError(message);
       setProfile(null);
-      return null;
+      return { user: null, error: message };
     }
   };
 
@@ -113,8 +123,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     getRedirectResult(auth)
       .then(async (result) => {
         if (!mounted || !result?.user) return;
-        const synced = await syncProfile(result.user);
-        if (!synced || synced.role !== 'admin') {
+        const syncResult = await syncProfile(result.user);
+        if (syncResult.error) {
+          await firebaseSignOut(auth);
+          if (mounted) {
+            setProfile(null);
+            setAuthError(syncResult.error);
+          }
+          return;
+        }
+        if (!syncResult.user || syncResult.user.role !== 'admin') {
           await firebaseSignOut(auth);
           if (mounted) {
             setProfile(null);
@@ -156,8 +174,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         rememberMe ? browserLocalPersistence : browserSessionPersistence
       );
       const result = await signInWithEmailAndPassword(auth, email.trim(), password);
-      const synced = await syncProfile(result.user);
-      if (!synced || synced.role !== 'admin') {
+      const syncResult = await syncProfile(result.user);
+      if (syncResult.error) {
+        await firebaseSignOut(auth);
+        setProfile(null);
+        setAuthError(syncResult.error);
+        return { ok: false, error: syncResult.error };
+      }
+      if (!syncResult.user || syncResult.user.role !== 'admin') {
         await firebaseSignOut(auth);
         setProfile(null);
         const msg = 'Access denied. Only authorized administrators can sign in.';
@@ -187,8 +211,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthError(null);
     try {
       const result = await signInWithPopup(auth, googleAuthProvider);
-      const synced = await syncProfile(result.user);
-      if (!synced || synced.role !== 'admin') {
+      const syncResult = await syncProfile(result.user);
+      if (syncResult.error) {
+        await firebaseSignOut(auth);
+        setProfile(null);
+        setAuthError(syncResult.error);
+        return { ok: false, error: syncResult.error };
+      }
+      if (!syncResult.user || syncResult.user.role !== 'admin') {
         await firebaseSignOut(auth);
         setProfile(null);
         const msg =

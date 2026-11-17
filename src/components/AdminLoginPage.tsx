@@ -31,24 +31,28 @@ export function AdminLoginPage({
   const [forgotMode, setForgotMode] = useState(false);
   const [resetSent, setResetSent] = useState<string | null>(null);
 
-  const handleLoginSubmit = async (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setValidationError(null);
     setResetSent(null);
+    setPopupBlocked(false);
 
-    const trimmedEmail = email.trim();
-    if (!trimmedEmail || !trimmedEmail.includes('@')) {
+    const formData = new FormData(e.currentTarget);
+    const rawEmail = String(formData.get('email') ?? email ?? '').trim();
+    const rawPassword = String(formData.get('password') ?? password ?? '');
+
+    if (!rawEmail || !rawEmail.includes('@')) {
       setValidationError('Please enter a valid administrator email address.');
       return;
     }
-    if (!password || password.length < 6) {
+    if (!rawPassword || rawPassword.length < 6) {
       setValidationError('Please enter your password (minimum 6 characters).');
       return;
     }
 
     setSubmitting(true);
     try {
-      const res = await signInWithEmail(trimmedEmail, password, rememberMe);
+      const res = await signInWithEmail(rawEmail, rawPassword, rememberMe);
       if (res.ok) {
         onSuccessRedirect();
       } else if (res.error) {
@@ -245,93 +249,14 @@ export function AdminLoginPage({
             </button>
           </form>
         ) : (
-          <form onSubmit={handleLoginSubmit} className="space-y-5" noValidate>
-            <div>
-              <label
-                htmlFor="admin-email"
-                className="block text-xs font-semibold text-[#102C40] mb-1.5"
-              >
-                Email Address
-              </label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-[#102C40]/45 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  id="admin-email"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Enter administrator email"
-                  className="w-full pl-10 pr-4 py-2.5 text-sm text-[#102C40] bg-white border border-[#CBD5E1] rounded-lg focus:outline-none focus:border-[#102C40] focus:ring-2 focus:ring-[#F5C542]/40"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label
-                htmlFor="admin-password"
-                className="block text-xs font-semibold text-[#102C40] mb-1.5"
-              >
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="w-4 h-4 text-[#102C40]/45 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  id="admin-password"
-                  type={showPassword ? 'text' : 'password'}
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter password"
-                  className="w-full pl-10 pr-11 py-2.5 text-sm text-[#102C40] bg-white border border-[#CBD5E1] rounded-lg focus:outline-none focus:border-[#102C40] focus:ring-2 focus:ring-[#F5C542]/40"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-[#102C40]/55 hover:text-[#102C40]"
-                >
-                  {showPassword ? (
-                    <EyeOff className="w-4 h-4" />
-                  ) : (
-                    <Eye className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between text-xs">
-              <label className="inline-flex items-center gap-2 text-[#102C40]/80 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="rounded border-[#CBD5E1] text-[#102C40] focus:ring-[#F5C542]"
-                />
-                <span>Remember me</span>
-              </label>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setForgotMode(true);
-                  setValidationError(null);
-                  setResetSent(null);
-                }}
-                className="font-semibold text-[#102C40] hover:text-[#39A9DB] transition-colors"
-              >
-                Forgot Password?
-              </button>
-            </div>
-
+          <div className="space-y-5">
             <button
-              type="submit"
+              type="button"
               disabled={submitting}
+              onClick={handleGoogleLogin}
               className="w-full py-2.5 px-4 text-sm font-semibold text-[#102C40] bg-[#F5C542] hover:bg-[#e7b732] disabled:opacity-60 rounded-lg transition-colors shadow-xs"
             >
-              {submitting ? 'Signing In...' : 'Login to Dashboard'}
+              {submitting ? 'Signing In...' : 'Sign in with Authorized Google Account'}
             </button>
 
             <div className="relative py-1">
@@ -339,19 +264,110 @@ export function AdminLoginPage({
                 <div className="w-full border-t border-[#E2E8F0]" />
               </div>
               <div className="relative flex justify-center text-xs">
-                <span className="bg-white px-2.5 text-[#102C40]/50">or</span>
+                <span className="bg-white px-2.5 text-[#102C40]/50">
+                  or sign in with email &amp; password
+                </span>
               </div>
             </div>
 
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={handleGoogleLogin}
-              className="w-full py-2.5 px-4 text-sm font-semibold text-[#102C40] bg-white border border-[#CBD5E1] hover:bg-[#F8FAFC] disabled:opacity-60 rounded-lg transition-colors"
-            >
-              Sign in with Authorized Google Account
-            </button>
-          </form>
+            <form onSubmit={handleLoginSubmit} className="space-y-4" noValidate>
+              <div>
+                <label
+                  htmlFor="admin-email"
+                  className="block text-xs font-semibold text-[#102C40] mb-1.5"
+                >
+                  Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-[#102C40]/45 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    id="admin-email"
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (validationError) setValidationError(null);
+                    }}
+                    placeholder="Enter administrator email"
+                    className="w-full pl-10 pr-4 py-2.5 text-sm text-[#102C40] bg-white border border-[#CBD5E1] rounded-lg focus:outline-none focus:border-[#102C40] focus:ring-2 focus:ring-[#F5C542]/40"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="admin-password"
+                  className="block text-xs font-semibold text-[#102C40] mb-1.5"
+                >
+                  Password
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-[#102C40]/45 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    id="admin-password"
+                    name="password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
+                    required
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (validationError) setValidationError(null);
+                    }}
+                    placeholder="Enter password"
+                    className="w-full pl-10 pr-11 py-2.5 text-sm text-[#102C40] bg-white border border-[#CBD5E1] rounded-lg focus:outline-none focus:border-[#102C40] focus:ring-2 focus:ring-[#F5C542]/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-[#102C40]/55 hover:text-[#102C40]"
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-xs">
+                <label className="inline-flex items-center gap-2 text-[#102C40]/80 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
+                    className="rounded border-[#CBD5E1] text-[#102C40] focus:ring-[#F5C542]"
+                  />
+                  <span>Remember me</span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotMode(true);
+                    setValidationError(null);
+                    setResetSent(null);
+                  }}
+                  className="font-semibold text-[#102C40] hover:text-[#39A9DB] transition-colors"
+                >
+                  Forgot Password?
+                </button>
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-[#102C40] hover:bg-[#193F5B] disabled:opacity-60 rounded-lg transition-colors"
+              >
+                {submitting ? 'Signing In...' : 'Login with Email & Password'}
+              </button>
+            </form>
+          </div>
         )}
 
         <div className="mt-8 pt-6 border-t border-[#E2E8F0] flex items-center justify-between text-xs text-[#102C40]/65">

@@ -35,9 +35,11 @@ export const requireAuth = async (
     );
     req.dbUser = dbUser;
     next();
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error verifying Firebase ID token:', error);
-    return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+    return res.status(401).json({
+      error: `Unauthorized: ${error?.code || error?.message || 'Invalid token'}`,
+    });
   }
 };
 
